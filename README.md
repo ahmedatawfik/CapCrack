@@ -80,16 +80,17 @@ curl -X POST http://localhost:5000/crack_wifi \
 - Temporary files, including `Tocrack.pcap` and `cracked.txt`, are deleted after a successful response to keep the environment clean.
 
 ## Requirements
-- Python 3.x
+- Python 3.11+
+- CUDA Toolkit (Optional)
 - Flask
-- `hashcat` must be installed and accessible via command line.
+- `hashcat` must be installed and accessible via command line. `hashcat-bin` must be included in the `PATH` environment variable.
 - Dependencies can be installed via:
   ```sh
-  pip install Flask
+  pip install flask
   ```
 
 ## Running the Server
 To run the Flask server on localhost (port 5000):
 ```sh
-python wifi_cracker_api.py
+python hashcracker.py
 ```
