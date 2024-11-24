@@ -4,11 +4,10 @@ import requests
 import csv
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTableWidget, QTableWidgetItem, QLabel, QInputDialog, QMessageBox,
+    QTableWidget, QTableWidgetItem, QInputDialog, QMessageBox,
     QHeaderView, QProgressDialog
 )
 from PyQt5.QtCore import QThread, pyqtSignal
-import re
 import os
 import time
 
@@ -108,8 +107,6 @@ class WiFiCrackerApp(QWidget):
         self.networks_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.networks_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.networks_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        #self.networks_table_label = QLabel("WiFi Networks")
-        #list_layout.addWidget(self.networks_table_label)
         list_layout.addWidget(self.networks_table)
 
         # Add buttons
@@ -179,13 +176,13 @@ class WiFiCrackerApp(QWidget):
         bssid = self.networks_table.item(selected_row, 1).text()
         channel = self.networks_table.item(selected_row, 2).text()
         try:
-            # Run monitoring tool (e.g., airodump-ng) to capture handshake
+            # Run airodump-ng to capture handshake
             process = subprocess.Popen(
                 ['airodump-ng', '--bssid', bssid, '--channel', channel, '-w', 'output_files/capture', 'wlan0mon'],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True
             )
 
-            # Monitor the output for WPA handshake
+            # Monitor the stdout for WPA handshake
             while True:
                 output = process.stdout.readline()
                 print(output, end='')
